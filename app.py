@@ -1,122 +1,203 @@
-import os, sqlite3, datetime, random
-from flask import Flask, request
+from flask import Flask, request, redirect, url_for, render_template_string
+from datetime import datetime
+import json
+import os
 
 app = Flask(__name__)
-DB = "/tmp/edenvale.db"
 
-def db():
-    c = sqlite3.connect(DB)
-    c.execute("CREATE TABLE IF NOT EXISTS stock (tracking TEXT PRIMARY KEY, item TEXT, qty INTEGER, status TEXT, date_in TEXT)")
-    c.execute("CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, tracking TEXT, item_name TEXT, driver_id TEXT, driver_name TEXT, time TEXT)")
-    return c
+DATA_FILE = "stock_data.json"
 
-STYLE = """
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdn.tailwindcss.com"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-<style>body{font-family:'Inter',sans-serif}</style>
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_data(data):
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f)
+
+stocks = load_data()
+next_id = max([s.get('id',0) for s in stocks], default=0) + 1
+
+BASE_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+* {font-family: 'Inter', sans-serif; box-sizing: border-box; margin:0; padding:0}
+body {background:#f5f7fb; color:#1e293b}
+.header {background: linear-gradient(135deg,#2563eb 0%,#1e40af 100%); color:white; padding:22px 24px; display:flex; justify-content:space-between; align-items:center}
+.header h1 {font-size:22px; font-weight:700}
+.header span {background:rgba(255,255,255,0.2); padding:6px 12px; border-radius:20px; font-size:12px}
+.container {max-width:1100px; margin:0 auto; padding:20px}
+.cards {display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-bottom:24px}
+.card {background:white; border-radius:16px; padding:20px; box-shadow:0 4px 12px rgba(0,0,0,0.05); border-left:5px solid}
+.card.blue {border-color:#2563eb} .card.green {border-color:#10b981} .card.orange {border-color:#f59e0b}
+.card h3 {font-size:12px; color:#64748b; letter-spacing:1px; margin-bottom:8px}
+.card .val {font-size:32px; font-weight:700; color:#0f172a}
+.buttons {display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; margin-bottom:24px}
+.btn {display:flex; align-items:center; justify-content:center; gap:8px; padding:16px; border-radius:12px; text-decoration:none; font-weight:600; color:white; transition:0.2s}
+.btn:hover {transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,0.15)}
+.btn-receive {background:#2563eb} .btn-pickup {background:#f59e0b} .btn-stock {background:#10b981} .btn-reports {background:#8b5cf6}
+.table-wrap {background:white; border-radius:16px; overflow:hidden; box-shadow:0 4px 12px rgba(0,0,0,0.05)}
+table {width:100%; border-collapse:collapse}
+th {background:#f8fafc; text-align:left; padding:14px 16px; font-size:12px; color:#64748b}
+td {padding:14px 16px; border-top:1px solid #f1f5f9; font-size:14px}
+.badge {padding:4px 10px; border-radius:20px; font-size:11px; font-weight:700}
+.badge.in {background:#dcfce7; color:#166534} .badge.out {background:#fef3c7; color:#92400e}
+.form-wrap {background:white; border-radius:16px; padding:24px; box-shadow:0 4px 12px rgba(0,0,0,0.05); max-width:600px}
+label {display:block; font-size:13px; font-weight:600; margin:16px 0 6px; color:#334155}
+input, select {width:100%; padding:12px 14px; border:1px solid #e2e8f0; border-radius:10px; font-size:14px}
+input:focus {outline:none; border-color:#2563eb}
+.submit {margin-top:20px; width:100%; padding:14px; background:#2563eb; color:white; border:none; border-radius:10px; font-weight:700; font-size:15px; cursor:pointer}
+.destination-highlight {background:#eff6ff; border:1px dashed #3b82f6; padding:10px 14px; border-radius:8px; font-weight:600; color:#1e40af}
+</style>
 """
 
-@app.route('/')
-def home():
-    conn = db()
-    stock = conn.execute("SELECT COUNT(*) FROM stock WHERE status='IN STOCK'").fetchone()[0]
-    picked = conn.execute("SELECT COUNT(*) FROM stock WHERE status='PICKED UP'").fetchone()[0]
-    total = conn.execute("SELECT COUNT(*) FROM stock").fetchone()[0]
-    conn.close()
+def layout(content, title="Edenvale System"):
     return f"""
-    {STYLE}
-    <body class="bg-slate-50 min-h-screen">
-    <div class="bg-gradient-to-r from-blue-700 to-indigo-800 text-white p-6 shadow-lg">
-        <h1 class="text-2xl font-bold">📦 EDENVALE WMS</h1>
-        <p class="opacity-80 text-sm">Warehouse Management System • Live</p>
-    </div>
-    <div class="p-4 grid grid-cols-3 gap-3 max-w-4xl mx-auto -mt-4">
-        <div class="bg-white rounded-xl shadow p-4 text-center"><div class="text-2xl font-bold text-blue-700">{total}</div><div class="text-xs text-slate-500">TOTAL</div></div>
-        <div class="bg-white rounded-xl shadow p-4 text-center"><div class="text-2xl font-bold text-emerald-600">{stock}</div><div class="text-xs text-slate-500">IN STOCK</div></div>
-        <div class="bg-white rounded-xl shadow p-4 text-center"><div class="text-2xl font-bold text-orange-600">{picked}</div><div class="text-xs text-slate-500">PICKED UP</div></div>
-    </div>
-    <div class="p-4 max-w-4xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-4">
-        <a href="/inbound" class="bg-white rounded-2xl shadow hover:shadow-lg p-6 border-l-4 border-emerald-500 transition"><div class="text-3xl">📥</div><h3 class="font-bold text-lg mt-2">Receive Stock</h3><p class="text-sm text-slate-500">Inbound • Generate box code</p></a>
-        <a href="/driver" class="bg-blue-600 rounded-2xl shadow hover:shadow-lg p-6 text-white transition"><div class="text-3xl">🚚</div><h3 class="font-bold text-lg mt-2">Driver Pickup</h3><p class="text-sm opacity-80">Scan & confirm pickup</p></a>
-        <a href="/stock" class="bg-white rounded-2xl shadow hover:shadow-lg p-6 border-l-4 border-blue-500 transition"><div class="text-3xl">📋</div><h3 class="font-bold text-lg mt-2">View Stock</h3><p class="text-sm text-slate-500">Check inventory</p></a>
-        <a href="/report" class="bg-white rounded-2xl shadow hover:shadow-lg p-6 border-l-4 border-indigo-500 transition"><div class="text-3xl">📊</div><h3 class="font-bold text-lg mt-2">Reports</h3><p class="text-sm text-slate-500">Pickup history</p></a>
-    </div>
-    <div class="text-center p-6 text-xs text-slate-400">edenvale.onrender.com • v2.0</div>
-    </body>
+    <!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>{title}</title>{BASE_CSS}</head><body>
+    <div class="header"><h1>🏭 Edenvale Returnables</h1><span>LIVE • {datetime.now().strftime('%d %b %H:%M')}</span></div>
+    <div class="container">{content}</div></body></html>
     """
+
+@app.route('/')
+def dashboard():
+    total = len(stocks)
+    in_stock = len([s for s in stocks if s['status']=='IN STOCK'])
+    picked = len([s for s in stocks if s['status']=='PICKED UP'])
+    content = f"""
+    <div class="cards">
+        <div class="card blue"><h3>TOTAL RECEIVED</h3><div class="val">{total}</div></div>
+        <div class="card green"><h3>IN STOCK</h3><div class="val">{in_stock}</div></div>
+        <div class="card orange"><h3>PICKED UP</h3><div class="val">{picked}</div></div>
+    </div>
+    <div class="buttons">
+        <a href="/receive" class="btn btn-receive">📦 Receive Stock</a>
+        <a href="/driver" class="btn btn-pickup">🚚 Driver Pickup</a>
+        <a href="/stock" class="btn btn-stock">📊 View Stock</a>
+        <a href="/reports" class="btn btn-reports">📈 Reports</a>
+    </div>
+    <div class="table-wrap">
+    <table><tr><th>ID</th><th>Product</th><th>Qty</th><th>Supplier</th><th>Destination / Going To</th><th>Status</th><th>Date</th></tr>
+    """
+    for s in reversed(stocks[-10:]):
+        badge = 'in' if s['status']=='IN STOCK' else 'out'
+        content += f"<tr><td>#{s['id']}</td><td><b>{s['product']}</b></td><td>{s['qty']}</td><td>{s['supplier']}</td><td><span class='destination-highlight'>📍 {s.get('destination','-')}</span></td><td><span class='badge {badge}'>{s['status']}</span></td><td>{s['date'][:16]}</td></tr>"
+    content += "</table></div><p style='margin-top:12px;color:#64748b;font-size:13px'>Showing last 10 - <a href='/stock'>View All</a></p>"
+    return render_template_string(layout(content))
+
+@app.route('/receive', methods=['GET','POST'])
+def receive():
+    global next_id
+    if request.method=='POST':
+        product = request.form.get('product','').strip()
+        qty = request.form.get('qty','').strip()
+        supplier = request.form.get('supplier','').strip()
+        destination = request.form.get('destination','').strip()
+        if product and qty:
+            new_entry = {
+                'id': next_id,
+                'product': product,
+                'qty': qty,
+                'supplier': supplier or 'Unknown',
+                'destination': destination or 'Not Specified',
+                'status': 'IN STOCK',
+                'driver': '',
+                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            stocks.append(new_entry)
+            save_data(stocks)
+            next_id+=1
+            return redirect('/')
+    form = """
+    <div class="form-wrap"><h2 style="margin-bottom:8px">📦 Receive New Stock</h2>
+    <p style="color:#64748b;font-size:13px;margin-bottom:12px">Counter staff - enter where this stock is going</p>
+    <form method="POST">
+        <label>Product / Item Name *</label><input name="product" placeholder="e.g. 20L Bottle, Pallet, Gas Bottle" required>
+        <label>Quantity *</label><input name="qty" type="number" placeholder="e.g. 10" required>
+        <label>Supplier / From Who</label><input name="supplier" placeholder="e.g. Customer Name / Supplier">
+        <label style="color:#2563eb">📍 Destination / Where is it going? *</label>
+        <input name="destination" placeholder="e.g. Yard A, Customer - Spar Edenvale, Truck 2, Warehouse 3" required style="border-color:#3b82f6; background:#eff6ff">
+        <button class="submit">✅ Save & Add to Stock</button>
+    </form><br><a href="/" style="color:#64748b;text-decoration:none">← Back to Dashboard</a></div>
+    """
+    return render_template_string(layout(form, "Receive Stock"))
 
 @app.route('/driver', methods=['GET','POST'])
 def driver():
-    msg = ""; color="slate"
-    if request.method == 'POST':
-        t = request.form['tracking'].upper().strip()
-        d_id = request.form['driver_id']
-        d_name = request.form['driver_name']
-        conn = db()
-        item = conn.execute("SELECT item FROM stock WHERE tracking=?", (t,)).fetchone()
-        if not item:
-            msg = f"❌ Box {t} NOT FOUND in system"; color="red"
-        else:
-            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            conn.execute("INSERT INTO pickups (tracking, item_name, driver_id, driver_name, time) VALUES (?,?,?,?,?)", (t, item[0], d_id, d_name, now))
-            conn.execute("UPDATE stock SET status='PICKED UP' WHERE tracking=?", (t,))
-            conn.commit()
-            msg = f"✅ SUCCESS! Box {t} picked up by {d_name} at {now}"; color="emerald"
-        conn.close()
-    return f"""
-    {STYLE}
-    <body class="bg-slate-50 min-h-screen">
-    <div class="bg-blue-700 text-white p-4 flex items-center gap-2"><a href="/" class="bg-white/20 rounded-full w-8 h-8 flex items-center justify-center">‹</a><div><h1 class="font-bold">DRIVER PICKUP</h1><p class="text-xs opacity-80">Edenvale Logistics</p></div></div>
-    <div class="max-w-md mx-auto p-4">
-        {"<div class='bg-"+color+"-100 border border-"+color+"-300 text-"+color+"-800 p-4 rounded-xl mb-4 font-semibold'>"+msg+"</div>" if msg else ""}
-        <div class="bg-white rounded-2xl shadow-xl p-6">
-            <h2 class="font-bold text-lg mb-4">Confirm Pickup</h2>
-            <form method="post" class="space-y-4">
-                <div><label class="text-xs font-semibold text-slate-600">BOX CODE</label><input name="tracking" placeholder="EDV-1234" required class="w-full border-2 border-slate-200 rounded-xl p-3 mt-1 uppercase font-mono font-bold"></div>
-                <div><label class="text-xs font-semibold text-slate-600">DRIVER ID</label><input name="driver_id" placeholder="DRV-001" required class="w-full border-2 border-slate-200 rounded-xl p-3 mt-1"></div>
-                <div><label class="text-xs font-semibold text-slate-600">DRIVER NAME</label><input name="driver_name" placeholder="John Smith" required class="w-full border-2 border-slate-200 rounded-xl p-3 mt-1"></div>
-                <button class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg transition">✅ CONFIRM PICKUP</button>
-            </form>
-        </div>
-        <div class="mt-4 text-center"><a href="/" class="text-sm text-slate-500">← Back to Dashboard</a></div>
-    </div>
-    </body>
+    if request.method=='POST':
+        sid = int(request.form.get('stock_id','0'))
+        driver_name = request.form.get('driver_name','').strip()
+        for s in stocks:
+            if s['id']==sid and s['status']=='IN STOCK':
+                s['status']='PICKED UP'
+                s['driver']=driver_name
+                s['pickup_date']=datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                save_data(stocks)
+                break
+        return redirect('/driver')
+    in_stock_items = [s for s in stocks if s['status']=='IN STOCK']
+    content = """
+    <div class="form-wrap" style="max-width:800px"><h2>🚚 Driver Pickup</h2>
+    <p style="color:#64748b;font-size:13px;margin:8px 0 16px">Driver sees DESTINATION so no confusion where to take it</p>
     """
-
-@app.route('/inbound', methods=['GET','POST'])
-def inbound():
-    if request.method == 'POST':
-        item = request.form['item']; qty = request.form['qty']
-        t = request.form.get('tracking') or f"EDV-{random.randint(1000,9999)}"
-        t = t.upper()
-        conn = db(); conn.execute("INSERT OR REPLACE INTO stock VALUES (?,?,?,?,?)", (t, item, qty, 'IN STOCK', datetime.datetime.now().strftime("%Y-%m-%d %H:%M")))
-        conn.commit(); conn.close()
-        return f"{STYLE}<body class='bg-slate-50 min-h-screen p-6'><div class='max-w-md mx-auto bg-white rounded-2xl shadow-xl p-6 text-center'><div class='text-5xl'>✅</div><h2 class='font-bold text-xl mt-2'>Saved!</h2><p class='font-mono bg-slate-100 p-2 rounded mt-2'>{t}</p><a href='/inbound' class='mt-4 inline-block bg-blue-600 text-white px-6 py-3 rounded-xl'>Add Another</a> <a href='/' class='ml-2 text-slate-500'>Home</a></div></body>"
-    return f"""
-    {STYLE}
-    <body class="bg-slate-50 min-h-screen">
-    <div class="bg-emerald-600 text-white p-4 flex items-center gap-2"><a href="/" class="bg-white/20 rounded-full w-8 h-8 flex items-center justify-center">‹</a><h1 class="font-bold">RECEIVE STOCK</h1></div>
-    <div class="max-w-md mx-auto p-4"><div class="bg-white rounded-2xl shadow-xl p-6">
-    <form method="post" class="space-y-4">
-        <div><label class="text-xs font-semibold">ITEM NAME</label><input name="item" placeholder="Laptops Dell XPS" required class="w-full border-2 rounded-xl p-3 mt-1"></div>
-        <div><label class="text-xs font-semibold">QUANTITY</label><input name="qty" type="number" placeholder="10" required class="w-full border-2 rounded-xl p-3 mt-1"></div>
-        <div><label class="text-xs font-semibold">BOX CODE (optional)</label><input name="tracking" placeholder="EDV-1234 (auto if blank)" class="w-full border-2 rounded-xl p-3 mt-1 font-mono"></div>
-        <button class="w-full bg-emerald-600 text-white font-bold py-4 rounded-xl">💾 SAVE TO STOCK</button>
-    </form></div></div></body>
-    """
+    if not in_stock_items:
+        content += "<p style='padding:20px;background:#fef3c7;border-radius:10px'>No stock in yard. Receive stock first.</p>"
+    else:
+        for s in in_stock_items:
+            content += f"""
+            <div style="border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+                <div><b>#{s['id']} {s['product']} x{s['qty']}</b><br>
+                <span style="font-size:12px;color:#64748b">From: {s['supplier']} • {s['date'][:16]}</span><br>
+                <span class="destination-highlight">📍 GOING TO: {s.get('destination','-')}</span>
+                </div>
+                <form method="POST" style="display:flex;gap:8px"><input type="hidden" name="stock_id" value="{s['id']}">
+                <input name="driver_name" placeholder="Driver Name / PIN" required style="width:150px">
+                <button style="background:#f59e0b;color:white;border:none;padding:10px 16px;border-radius:8px;font-weight:700;cursor:pointer">Pickup</button>
+                </form>
+            </div>
+            """
+    content += "<br><a href='/' style='color:#64748b;text-decoration:none'>← Back</a></div>"
+    return render_template_string(layout(content, "Driver Pickup"))
 
 @app.route('/stock')
-def stock_view():
-    conn = db(); rows = conn.execute("SELECT tracking, item, qty, status, date_in FROM stock ORDER BY date_in DESC").fetchall(); conn.close()
-    rows_html = "".join([f"<tr class='border-b'><td class='p-3 font-mono font-bold'>{r[0]}</td><td class='p-3'>{r[1]}</td><td class='p-3'>{r[2]}</td><td class='p-3'><span class='px-2 py-1 rounded-full text-xs {"bg-emerald-100 text-emerald-700" if r[3]=="IN STOCK" else "bg-orange-100 text-orange-700"}'>{r[3]}</span></td></tr>" for r in rows]) or "<tr><td colspan=4 class='p-6 text-center text-slate-400'>No stock yet</td></tr>"
-    return f"{STYLE}<body class='bg-slate-50'><div class='bg-blue-700 text-white p-4 flex gap-2 items-center'><a href='/' class='bg-white/20 w-8 h-8 rounded-full flex items-center justify-center'>‹</a><h1 class='font-bold'>STOCK LIST</h1></div><div class='p-4 max-w-4xl mx-auto bg-white rounded-2xl shadow mt-4 overflow-auto'><table class='w-full text-sm'><thead class='bg-slate-100'><tr><th class='p-3 text-left'>CODE</th><th class='p-3 text-left'>ITEM</th><th class='p-3'>QTY</th><th class='p-3'>STATUS</th></tr></thead><tbody>{rows_html}</tbody></table></div></body>"
+def view_stock():
+    content = """<div class="table-wrap"><div style="padding:16px 20px;display:flex;justify-content:space-between;align-items:center"><h2>📊 All Stock</h2><a href="/" style="text-decoration:none;color:#2563eb;font-weight:600">← Dashboard</a></div>
+    <table><tr><th>ID</th><th>Product</th><th>Qty</th><th>From</th><th>📍 Destination</th><th>Status</th><th>Driver</th><th>Date</th></tr>"""
+    for s in reversed(stocks):
+        badge = 'in' if s['status']=='IN STOCK' else 'out'
+        content += f"<tr><td>#{s['id']}</td><td><b>{s['product']}</b></td><td>{s['qty']}</td><td>{s['supplier']}</td><td><span class='destination-highlight'>{s.get('destination','-')}</span></td><td><span class='badge {badge}'>{s['status']}</span></td><td>{s.get('driver','-')}</td><td>{s['date'][:16]}</td></tr>"
+    content += "</table></div>"
+    return render_template_string(layout(content, "View Stock"))
 
-@app.route('/report')
-def report():
-    conn = db(); rows = conn.execute("SELECT tracking, item_name, driver_id, driver_name, time FROM pickups ORDER BY time DESC LIMIT 50").fetchall(); conn.close()
-    rows_html = "".join([f"<tr class='border-b'><td class='p-3 font-mono'>{r[0]}</td><td class='p-3'>{r[1]}</td><td class='p-3'>{r[3]}<div class='text-xs text-slate-400'>{r[2]}</div></td><td class='p-3 text-xs'>{r[4]}</td></tr>" for r in rows]) or "<tr><td colspan=4 class='p-6 text-center text-slate-400'>No pickups yet</td></tr>"
-    return f"{STYLE}<body class='bg-slate-50'><div class='bg-indigo-700 text-white p-4 flex gap-2 items-center'><a href='/' class='bg-white/20 w-8 h-8 rounded-full flex items-center justify-center'>‹</a><h1 class='font-bold'>PICKUP REPORT</h1></div><div class='p-4 max-w-4xl mx-auto bg-white rounded-2xl shadow mt-4 overflow-auto'><table class='w-full text-sm'><thead class='bg-slate-100'><tr><th class='p-3'>BOX</th><th class='p-3'>ITEM</th><th class='p-3'>DRIVER</th><th class='p-3'>TIME</th></tr></thead><tbody>{rows_html}</tbody></table></div></body>"
+@app.route('/reports')
+def reports():
+    total = len(stocks)
+    in_stock = len([s for s in stocks if s['status']=='IN STOCK'])
+    picked = len([s for s in stocks if s['status']=='PICKED UP'])
+    dest_count = {}
+    for s in stocks:
+        if s['status']=='IN STOCK':
+            dest_count[s.get('destination','Unknown')] = dest_count.get(s.get('destination','Unknown'),0)+1
+    dest_html = "".join([f"<tr><td>{k}</td><td>{v}</td></tr>" for k,v in dest_count.items()]) or "<tr><td colspan=2>No data</td></tr>"
+    content = f"""
+    <div class="cards">
+        <div class="card blue"><h3>TOTAL</h3><div class="val">{total}</div></div>
+        <div class="card green"><h3>IN STOCK</h3><div class="val">{in_stock}</div></div>
+        <div class="card orange"><h3>PICKED UP</h3><div class="val">{picked}</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="table-wrap" style="padding:16px"><h3>📍 Stock by Destination</h3><table style="margin-top:12px"><tr><th>Destination</th><th>Count</th></tr>{dest_html}</table></div>
+        <div class="table-wrap" style="padding:16px"><h3>🚚 Recent Pickups</h3><table style="margin-top:12px"><tr><th>Item</th><th>Driver</th><th>To</th></tr>
+        {"".join([f"<tr><td>{s['product']}</td><td>{s.get('driver','-')}</td><td>{s.get('destination','-')}</td></tr>" for s in reversed([x for x in stocks if x['status']=='PICKED UP'][-5:])]) or "<tr><td colspan=3>No pickups yet</td></tr>"}
+        </table></div>
+    </div><br><a href="/" style="color:#64748b;text-decoration:none">← Back</a>
+    """
+    return render_template_string(layout(content, "Reports"))
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
+    app.run(host='0.0.0.0', port=10000)
